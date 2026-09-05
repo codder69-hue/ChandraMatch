@@ -1,0 +1,13 @@
+opencv-python>=4.8
+opencv-contrib-python>=4.8
+numpy>=1.24
+matplotlib>=3.7
+pandas>=2.0
+streamlit>=1.30
+pillow>=10.0
+pdr>=1.0
+
+# Optional - only needed if you want to open the forked repos' .ipynb
+# notebooks (e.g. MoonMetaSync's data_scraping_preprocessing.ipynb)
+# directly inside VS Code.
+# ipykernel

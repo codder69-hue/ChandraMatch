@@ -1,0 +1,21 @@
+# Virtual environment - machine-specific, rebuild from requirements.txt
+.venv/
+venv/
+
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# Downloaded Chandrayaan-2 data - each product is ~750MB-1.2GB, GitHub
+# will reject pushes with files this large (100MB hard limit). Never
+# commit this folder. Data source and download instructions are in
+# README.md instead.
+data/
+
+# Scratch/working output from individual pipeline runs - regenerated
+# every time you run the scripts, not meant to persist. Curated demo
+# results belong in saved_results/ instead (that folder IS committed).
+outputs/
+
+# Streamlit local config/secrets, if ever created
+.streamlit/

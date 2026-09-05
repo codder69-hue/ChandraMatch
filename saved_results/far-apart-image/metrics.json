@@ -1,0 +1,9 @@
+{
+  "num_features_img1": 1770,
+  "num_features_img2": 2232,
+  "num_candidate_matches": 15,
+  "num_inlier_matches": 5,
+  "inlier_ratio": 0.3333,
+  "reprojection_rmse_px": 0.439,
+  "processing_time_s": 0.806
+}
