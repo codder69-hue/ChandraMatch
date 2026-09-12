@@ -34,9 +34,7 @@ KNOWN_KEYS_BAND_AXIS = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Phase 0 helper: synthetic test pair generator (no real data needed)
-# ---------------------------------------------------------------------------
 def generate_synthetic_pair(size=600, seed=7):
     rng = np.random.default_rng(seed)
     img = np.full((size, size), 60, dtype=np.uint8)
@@ -66,9 +64,7 @@ def generate_synthetic_pair(size=600, seed=7):
     return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), cv2.cvtColor(img2, cv2.COLOR_GRAY2BGR)
 
 
-# ---------------------------------------------------------------------------
 # Phase 2 helper: load a real Chandrayaan-2 PDS4 product (OHRC/TMC-2/IIRS)
-# ---------------------------------------------------------------------------
 def load_pds4_image(xml_path, band_index=0, max_dim=4000):
     """
     Loads a PDS4 product via `pdr` and returns an 8-bit BGR image ready
@@ -149,9 +145,7 @@ def inspect_pds4(xml_path):
             print(f"  {k}: <could not array-ify: {e}>")
 
 
-# ---------------------------------------------------------------------------
 # FR-02: Preprocessing
-# ---------------------------------------------------------------------------
 def preprocess(img_bgr, max_dim=1024):
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
@@ -163,9 +157,7 @@ def preprocess(img_bgr, max_dim=1024):
     return gray, scale
 
 
-# ---------------------------------------------------------------------------
 # FR-03 + FR-04: Feature detection + description
-# ---------------------------------------------------------------------------
 def detect_and_describe(gray, method="orb", n_features=3000):
     method = method.lower()
     if method == "orb":
@@ -178,10 +170,15 @@ def detect_and_describe(gray, method="orb", n_features=3000):
     return keypoints, descriptors
 
 
-# ---------------------------------------------------------------------------
 # FR-05: Feature matching
-# ---------------------------------------------------------------------------
 def match_features(desc1, desc2, method="orb", ratio_thresh=0.75):
+    if desc1 is None or desc2 is None or len(desc1) == 0 or len(desc2) == 0:
+        print("WARNING: one image produced zero usable keypoints/descriptors - "
+              "no matches are possible. This usually means that image had too "
+              "little texture/contrast for the detector to find anything (for "
+              "IIRS, try a different --band - not every wavelength has equally "
+              "clear surface detail).")
+        return []
     norm = cv2.NORM_HAMMING if method.lower() == "orb" else cv2.NORM_L2
     bf = cv2.BFMatcher(norm)
     raw_pairs = bf.knnMatch(desc1, desc2, k=2)
@@ -195,9 +192,7 @@ def match_features(desc1, desc2, method="orb", ratio_thresh=0.75):
     return good
 
 
-# ---------------------------------------------------------------------------
 # FR-06 + FR-07: Outlier rejection (RANSAC) + geometric transform estimate
-# ---------------------------------------------------------------------------
 def estimate_homography(kp1, kp2, matches, ransac_thresh=5.0):
     if len(matches) < 4:
         return None, None
@@ -213,9 +208,7 @@ def register_images(gray1, gray2, H):
     return warped2
 
 
-# ---------------------------------------------------------------------------
 # FR-11: Evaluation metrics
-# ---------------------------------------------------------------------------
 def evaluate(kp1, kp2, matches, mask, H, elapsed_s):
     n_inliers = int(mask.sum()) if mask is not None else 0
     n_matches = len(matches)
@@ -240,9 +233,7 @@ def evaluate(kp1, kp2, matches, mask, H, elapsed_s):
     }
 
 
-# ---------------------------------------------------------------------------
 # FR-12: Visualization
-# ---------------------------------------------------------------------------
 def visualize(img1, img2, kp1, kp2, matches, mask, gray1, warped2, out_dir):
     os.makedirs(out_dir, exist_ok=True)
     mask_list = mask.ravel().tolist() if mask is not None else None
@@ -280,15 +271,28 @@ def visualize(img1, img2, kp1, kp2, matches, mask, gray1, warped2, out_dir):
     plt.close(fig)
 
 
-# ---------------------------------------------------------------------------
 # Orchestration
-# ---------------------------------------------------------------------------
 def run_pipeline(img1_bgr, img2_bgr, detector="orb", out_dir="outputs"):
     t0 = time.time()
     gray1, _ = preprocess(img1_bgr)
     gray2, _ = preprocess(img2_bgr)
     kp1, desc1 = detect_and_describe(gray1, detector)
     kp2, desc2 = detect_and_describe(gray2, detector)
+
+    print(f"Image A: {len(kp1)} keypoints found")
+    print(f"Image B: {len(kp2)} keypoints found")
+    if desc1 is None or len(kp1) == 0:
+        print("Registration FAILED: zero keypoints in Image A - the content "
+              "is likely too smooth/low-texture for this detector to find "
+              "any features at all. This can be a real, reportable finding "
+              "(e.g. a spectral band with little surface contrast), not "
+              "necessarily a bug. Try a different --band, or SIFT instead "
+              "of ORB, before assuming something is broken.")
+        return None
+    if desc2 is None or len(kp2) == 0:
+        print("Registration FAILED: zero keypoints in Image B - see note above.")
+        return None
+
     matches = match_features(desc1, desc2, detector)
     H, mask = estimate_homography(kp1, kp2, matches)
 
