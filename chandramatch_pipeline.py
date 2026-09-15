@@ -65,11 +65,13 @@ def generate_synthetic_pair(size=600, seed=7):
 
 
 # Phase 2 helper: load a real Chandrayaan-2 PDS4 product (OHRC/TMC-2/IIRS)
-def load_pds4_image(xml_path, band_index=0, max_dim=4000):
-    """
-    Loads a PDS4 product via `pdr` and returns an 8-bit BGR image ready
-    for the rest of the pipeline. Handles both plain 2D scenes
-    (OHRC/TMC-2) and 3D hyperspectral cubes (IIRS).
+def load_pds4_raw(xml_path):
+    """Reads a PDS4 product and returns (raw_array, key_name) with no
+    band selection, downsampling, or normalization applied yet. Split
+    out from load_pds4_image() so batch tools can load an expensive
+    file (e.g. a ~1GB IIRS cube) ONCE and cheaply re-slice different
+    bands from memory afterward, instead of re-reading from disk
+    every time.
     """
     try:
         import pdr
@@ -97,40 +99,66 @@ def load_pds4_image(xml_path, band_index=0, max_dim=4000):
 
     arr = np.squeeze(np.asarray(product[pick]))
     print(f"Loaded '{pick}': shape={arr.shape} dtype={arr.dtype}")
+    return arr, pick
 
+
+def num_bands(arr, pick_key):
+    """How many band choices exist for this array (1 if it's plain 2D)."""
+    if arr.ndim != 3:
+        return 1
+    band_axis = KNOWN_KEYS_BAND_AXIS.get(pick_key, int(np.argmin(arr.shape)))
+    return arr.shape[band_axis]
+
+
+def postprocess_array(arr, pick_key, band_index=0, max_dim=4000, verbose=True):
+    """Takes a raw array from load_pds4_raw() and applies band
+    selection (if 3D) + downsampling + normalization -> 8-bit BGR
+    image. Cheap to call repeatedly with different band_index values
+    on the same cached array.
+    """
     if arr.ndim == 3:
-        if pick in KNOWN_KEYS_BAND_AXIS:
-            band_axis = KNOWN_KEYS_BAND_AXIS[pick]
+        if pick_key in KNOWN_KEYS_BAND_AXIS:
+            band_axis = KNOWN_KEYS_BAND_AXIS[pick_key]
         else:
-            # Fallback heuristic for unrecognized multi-band keys: assume
-            # the smallest dimension is the band axis. This is fragile
-            # (proven wrong for IIRS, where band count and one spatial
-            # dimension are close in size) - if you hit a new multi-band
-            # key, verify with --inspect and add it to
-            # KNOWN_KEYS_BAND_AXIS above rather than trusting this guess.
             band_axis = int(np.argmin(arr.shape))
-            print(f"WARNING: unrecognized multi-band key '{pick}' - guessing "
-                  f"band axis={band_axis} by smallest-dimension heuristic. "
-                  f"Verify this is correct before trusting results.")
-        arr = np.take(arr, indices=band_index, axis=band_axis)
-        print(f"Selected band {band_index} along axis {band_axis} -> shape={arr.shape}")
+            if verbose:
+                print(f"WARNING: unrecognized multi-band key '{pick_key}' - guessing "
+                      f"band axis={band_axis} by smallest-dimension heuristic.")
+        sliced = np.take(arr, indices=band_index, axis=band_axis)
+        if verbose:
+            print(f"Selected band {band_index} along axis {band_axis} -> shape={sliced.shape}")
+    else:
+        sliced = arr
 
-    h, w = arr.shape[:2]
+    h, w = sliced.shape[:2]
     scale = min(1.0, max_dim / max(h, w))
     if scale < 1.0:
-        resize_dtype = arr.dtype if arr.dtype in (np.uint8, np.uint16) else np.float32
-        arr = cv2.resize(arr.astype(resize_dtype), (int(w * scale), int(h * scale)),
-                          interpolation=cv2.INTER_AREA)
-        print(f"Downsampled to {arr.shape} (full-res is a later optimization, not needed now)")
+        resize_dtype = sliced.dtype if sliced.dtype in (np.uint8, np.uint16) else np.float32
+        sliced = cv2.resize(sliced.astype(resize_dtype), (int(w * scale), int(h * scale)),
+                             interpolation=cv2.INTER_AREA)
+        if verbose:
+            print(f"Downsampled to {sliced.shape} (full-res is a later optimization, not needed now)")
 
-    arr = arr.astype(np.float64)
-    valid = arr[np.isfinite(arr)]
+    sliced = sliced.astype(np.float64)
+    valid = sliced[np.isfinite(sliced)]
     if valid.size == 0:
-        raise SystemExit(f"{xml_path}: no finite pixel values found — wrong band/key?")
+        raise SystemExit("No finite pixel values found — wrong band/key?")
     lo, hi = np.percentile(valid, [2, 98])
-    arr = np.nan_to_num(np.clip(arr, lo, hi), nan=lo)
-    arr8 = ((arr - lo) / max(hi - lo, 1e-6) * 255.0).astype(np.uint8)
+    sliced = np.nan_to_num(np.clip(sliced, lo, hi), nan=lo)
+    arr8 = ((sliced - lo) / max(hi - lo, 1e-6) * 255.0).astype(np.uint8)
     return cv2.cvtColor(arr8, cv2.COLOR_GRAY2BGR)
+
+
+def load_pds4_image(xml_path, band_index=0, max_dim=4000):
+    """
+    Loads a PDS4 product via `pdr` and returns an 8-bit BGR image ready
+    for the rest of the pipeline. Convenience wrapper around
+    load_pds4_raw() + postprocess_array() for one-off use (batch tools
+    that need many bands from the same file should call those two
+    directly instead, to avoid re-reading the file from disk each time).
+    """
+    arr, pick = load_pds4_raw(xml_path)
+    return postprocess_array(arr, pick, band_index=band_index, max_dim=max_dim)
 
 
 def inspect_pds4(xml_path):

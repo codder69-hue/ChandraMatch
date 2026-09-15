@@ -1,27 +1,16 @@
 r"""
-ChandraMatch - Cross-Sensor (OHRC <-> TMC-2) Registration
-=============================================================
-OHRC (~0.25 m/px) and TMC-2 (~5 m/px) differ by roughly 20x in ground
-resolution. Running ORB/SIFT directly on both at native pixel scale
-will generally fail to match anything meaningful — keypoints simply
-don't look alike at such different physical scales.
-
-This estimates each scene's real ground-sample-distance (GSD, meters
-per pixel) directly from its geometry CSV (the same lat/lon sampling
-find_overlaps.py already reads), using great-circle distance on a
-lunar sphere between two widely-separated sample points. It then
-resizes the higher-resolution image down so both images represent
-comparable physical scale before handing them to the normal pipeline.
+ChandraMatch - Cross-Sensor (OHRC <-> TMC-2/IIRS) Registration
+==================================================================
+Estimates each scene's real ground-sample-distance (GSD, meters per
+pixel) from its geometry CSV, using great-circle distance on a lunar
+sphere between two widely-separated sample points, then resizes the
+higher-resolution image down so both images represent comparable
+physical scale before handing them to the normal pipeline.
 
 Usage:
     python cross_sensor.py \
-        --geo1 "...\OHRC_scene\geometry\...\file.csv" --xml1 "...\OHRC_scene\data\...\file.xml" \
-        --geo2 "...\TMC2_scene\geometry\...\file.csv" --xml2 "...\TMC2_scene\data\...\file.xml"
-
-Find candidate OHRC+TMC-2 pairs first with:
-    python find_overlaps.py --scan "C:\...\chandra match\data"
-(it works across sensors automatically — it only looks at footprint
-overlap, not which instrument a scene came from).
+        --geo1 "...\geometry\...\file.csv" --xml1 "...\data\...\file.xml" \
+        --geo2 "...\geometry\...\file.csv" --xml2 "...\data\...\file.xml"
 """
 
 import argparse
@@ -49,8 +38,7 @@ LINE_COL_CANDIDATES = ["Scan", "Line", "scan", "line"]
 
 def estimate_gsd(geometry_csv_path):
     """Estimates meters/pixel for a scene from its geometry CSV, using
-    the two sampled rows with the largest pixel-index separation (most
-    numerically stable estimate)."""
+    the two sampled rows with the largest pixel-index separation."""
     with open(geometry_csv_path, newline="") as f:
         reader = csv.reader(f)
         header = next(reader)
@@ -61,7 +49,7 @@ def estimate_gsd(geometry_csv_path):
         if None in (lat_i, lon_i, pix_i, line_i):
             raise ValueError(
                 f"Could not find lat/lon/pixel/line columns in {geometry_csv_path}. "
-                f"Header was: {header}. Run find_overlaps.py --inspect on this file."
+                f"Header was: {header}"
             )
         rows = []
         for row in reader:
@@ -79,8 +67,6 @@ def estimate_gsd(geometry_csv_path):
     def px_dist(a, b):
         return math.hypot(a[2] - b[2], a[3] - b[3])
 
-    # Sample instead of full O(n^2) scan — geometry files can have
-    # thousands of rows, we only need a good spread, not every row.
     sample = rows[::max(1, len(rows) // 50)]
     best_pair, best_d = None, -1
     for i in range(len(sample)):
@@ -103,8 +89,6 @@ def estimate_gsd(geometry_csv_path):
 
 
 def load_scale_normalized_pair(xml1, geo1, xml2, geo2):
-    """Loads both images and resizes the higher-resolution one down so
-    both represent comparable ground sampling distance."""
     gsd1 = estimate_gsd(geo1)
     gsd2 = estimate_gsd(geo2)
     ratio = max(gsd1, gsd2) / min(gsd1, gsd2)
@@ -130,11 +114,11 @@ def load_scale_normalized_pair(xml1, geo1, xml2, geo2):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Cross-sensor (e.g. OHRC<->TMC-2) registration")
-    parser.add_argument("--geo1", required=True, help="Geometry CSV for scene 1")
-    parser.add_argument("--xml1", required=True, help="PDS4 .xml for scene 1")
-    parser.add_argument("--geo2", required=True, help="Geometry CSV for scene 2")
-    parser.add_argument("--xml2", required=True, help="PDS4 .xml for scene 2")
+    parser = argparse.ArgumentParser(description="Cross-sensor registration")
+    parser.add_argument("--geo1", required=True)
+    parser.add_argument("--xml1", required=True)
+    parser.add_argument("--geo2", required=True)
+    parser.add_argument("--xml2", required=True)
     parser.add_argument("--detector", default="orb", choices=["orb", "sift"])
     args = parser.parse_args()
 
