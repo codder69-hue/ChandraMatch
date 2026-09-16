@@ -169,23 +169,55 @@ def main():
 
     # Cache: load each unique product from disk exactly once, regardless
     # of how many pairs/bands/detectors use it.
+    # Bounded cache: with an 8GB-RAM-class machine and real files often
+    # 1-2GB+ each (confirmed in practice - a single TMC-2 array here
+    # needed 2.06GB), caching every unique product touched across an
+    # 86-pair run would exhaust memory well before the run finishes.
+    # Keep only the few most recently used raw arrays in memory,
+    # evicting the oldest when the limit is hit - a product evicted and
+    # later revisited just gets reloaded from disk, which costs time
+    # but not correctness, and is still far better than the original
+    # per-band-per-detector reloading this script replaced.
+    MAX_CACHED_PRODUCTS = 3
     raw_cache = {}
+    cache_order = []  # oldest first
 
     def get_raw(name):
-        if name not in raw_cache:
-            root = find_product_root(name, args.scan)
-            xml = find_xml_for_product(root) if root else None
-            if not xml:
-                raw_cache[name] = None
-                return None
-            print(f"  (loading {name} - first time seeing this product)")
-            try:
-                arr, key = load_pds4_raw(xml)
-            except SystemExit as e:
-                print(f"    Failed to load: {e}")
-                arr, key = None, None
-            raw_cache[name] = (arr, key)
-        return raw_cache[name]
+        if name in raw_cache:
+            cache_order.remove(name)
+            cache_order.append(name)
+            return raw_cache[name]
+
+        root = find_product_root(name, args.scan)
+        xml = find_xml_for_product(root) if root else None
+        if not xml:
+            return None
+
+        print(f"  (loading {name} - not cached, reading from disk)")
+        try:
+            arr, key = load_pds4_raw(xml)
+            result = (arr, key)
+        except (SystemExit, Exception) as e:
+            # Broad catch deliberately: pdr can raise many different
+            # internal errors for corrupted/incomplete/unexpected files
+            # (seen in practice: a truncated download raising a raw
+            # numpy reshape error, and a genuine out-of-memory error on
+            # a 2GB+ array, both deep inside pdr's PDS4 reader). One bad
+            # or too-large file should skip that product, not crash the
+            # entire batch run.
+            print(f"    Failed to load ({type(e).__name__}): {e}")
+            print(f"    (this can mean an incomplete/corrupted download, "
+                  f"or the file is too large for available RAM)")
+            return None  # deliberately NOT cached - a transient OOM might
+                         # succeed later if memory frees up in the meantime
+
+        raw_cache[name] = result
+        cache_order.append(name)
+        if len(cache_order) > MAX_CACHED_PRODUCTS:
+            oldest = cache_order.pop(0)
+            del raw_cache[oldest]
+            print(f"    (evicted {oldest} from cache to free memory)")
+        return result
 
     total_runs = 0
     all_rows = []
