@@ -46,13 +46,30 @@ FIELDNAMES = [
 ]
 
 
-def find_xml_for_product(product_root):
+def find_xml_for_product(product_root, product_name=None):
     """Finds a product's main PDS4 label under any data/<subfolder>/,
     since different processing levels use different subfolder names
-    (calibrated, raw, derived)."""
+    (calibrated, raw, derived).
+
+    If multiple .xml files exist (seen in practice: stale leftovers from
+    an earlier mis-extraction sitting alongside a later correct one),
+    prefer whichever filename actually starts with the product's own
+    folder name, rather than silently taking whatever glob finds first."""
     pattern = os.path.join(product_root, "data", "**", "*.xml")
     matches = glob.glob(pattern, recursive=True)
-    return matches[0] if matches else None
+    if not matches:
+        return None
+    if len(matches) > 1:
+        print(f"    WARNING: {len(matches)} .xml files found under {product_root} "
+              f"- expected 1. Likely stale leftovers from a previous mis-extraction.")
+        if product_name:
+            preferred = [m for m in matches if os.path.basename(m).startswith(product_name)]
+            if preferred:
+                print(f"    Using the one matching the folder name: {os.path.basename(preferred[0])}")
+                return preferred[0]
+        print(f"    Could not confirm which is correct - using {os.path.basename(matches[0])}. "
+              f"Verify this manually; consider deleting the stale file(s).")
+    return matches[0]
 
 
 def find_product_root(name, scan_root):
@@ -189,7 +206,7 @@ def main():
             return raw_cache[name]
 
         root = find_product_root(name, args.scan)
-        xml = find_xml_for_product(root) if root else None
+        xml = find_xml_for_product(root, product_name=name) if root else None
         if not xml:
             return None
 
